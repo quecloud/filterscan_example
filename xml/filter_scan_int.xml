@@ -1,0 +1,141 @@
+<ROSETTASCRIPTS> //2020-03-03
+	<SCOREFXNS>
+		<ScoreFunction name="sfxn_hard" weights="beta">
+			//bcov's ubh_score
+			<Reweight scoretype="approximate_buried_unsat_penalty" weight="5.0" />
+			<Set approximate_buried_unsat_penalty_hbond_energy_threshold="-0.25" />
+			<Set approximate_buried_unsat_penalty_burial_atomic_depth="4.0" />
+			<Set approximate_buried_unsat_penalty_assume_const_backbone="true" />
+			//get rid of lk_ball
+			<Reweight scoretype="lk_ball" weight="0" />
+			<Reweight scoretype="lk_ball_iso" weight="0" />
+			<Reweight scoretype="lk_ball_wtd" weight="0" />
+			<Reweight scoretype="lk_ball_bridge" weight="0" />
+			<Reweight scoretype="lk_ball_bridge_uncpl" weight="0" />
+			Reweight scoretype="aa_composition" weight="1.0" />
+		</ScoreFunction>
+
+		<ScoreFunction name="sfxn_clean" weights="beta" symmetric="1" />
+	</SCOREFXNS>
+	
+    	<RESIDUE_SELECTORS>
+		//selects CPG residues (don't design these away)
+		<ResidueName name="CPG" residue_name3="CYS,PRO,GLY" />
+			<Not name="not_CPG" selector="CPG" />
+		
+			//NEW INTERFACE SELECTOR
+                <Chain name="chainA" chains="A"/>
+                <Chain name="chainB" chains="B"/>
+
+		<InterfaceByVector name="all_interface_resis" cb_dist_cut="11.0" nearby_atom_cut="5.5" vector_angle_cut="75.0" vector_dist_cut="9.0" grp1_selector="chainA" grp2_selector="chainB" />
+
+		<And name="interface_resis" selectors="all_interface_resis,not_CPG"/>
+		//set design_resis
+		<Neighborhood name="pack_resis" selector="interface_resis" distance="5" include_focus_in_subset="false" />
+		<Or name="interface_and_pack_resis" selectors="interface_resis,pack_resis" />
+		<Not name="lock_resis" selector="interface_and_pack_resis" />
+
+        <And name="int_resis_chainA" selectors="interface_resis,chainA" />
+        <And name="int_resis_chainB" selectors="interface_resis,chainB" />
+
+        //for ala_mut
+        <ResidueName name="very_polar_resis" residue_name3="ASP,GLU,ASN,GLN,HIS,LYS,ARG" />
+        <And name="polar_int_resis" selectors="interface_resis,very_polar_resis" />
+            <Not name="not_polar_int_resis" selector="polar_int_resis" />
+	</RESIDUE_SELECTORS>
+	
+	<TASKOPERATIONS>
+		<IncludeCurrent name="ic" />											//includes input pdb's rotamers
+		<RestrictToRepacking name="repack_only" />								//for minimize/repack
+		<ExtraRotamersGeneric name="ex1_ex2" ex1="1" ex2="0" ex2aro="1" />		//use ex1 ex2 rotamers
+
+		//setup tasks
+		<OperateOnResidueSubset name="interface_task" selector="interface_resis" >
+			<RestrictAbsentCanonicalAASRLT aas="ADEFHIKLMNQRSTVWY" /> 
+		</OperateOnResidueSubset>
+		<OperateOnResidueSubset name="pack_task" selector="pack_resis" >
+			<RestrictToRepackingRLT/> 
+		</OperateOnResidueSubset>
+		<OperateOnResidueSubset name="lock_task" selector="lock_resis" >
+			<PreventRepackingRLT/> 
+		</OperateOnResidueSubset>
+		
+		//setup for ala_mut
+		<OperateOnResidueSubset name="polar_interface_resis_task" selector="polar_int_resis" >
+			<RestrictAbsentCanonicalAASRLT aas="A" /> 
+		</OperateOnResidueSubset>
+		<OperateOnResidueSubset name="lock_polar_interface_resis_task" selector="not_polar_int_resis" >
+			<PreventRepackingRLT/> 
+		</OperateOnResidueSubset>
+	</TASKOPERATIONS>
+
+	<MOVERS>
+		<TaskAwareMinMover name="min_clean" scorefxn="sfxn_clean" bb="0" chi="1" jump="1" task_operations="pack_task,lock_task" />
+		<PackRotamersMover name="repack_clean" scorefxn="sfxn_clean" task_operations="pack_task,lock_task,ic,ex1_ex2,repack_only" />
+
+		<ParsedProtocol name="min_repack_min" >
+			<Add mover="min_clean" />
+			<Add mover="repack_clean" />
+			<Add mover="min_clean" />
+		</ParsedProtocol>
+
+		<AddResidueLabel name="label_interface_resis" residue_selector="interface_resis" label="interface_resis" />
+
+        //mutate polar residues at interface to Ala before calculating some filters
+		<SymPackRotamersMover name="ala_mut" scorefxn="sfxn_clean" task_operations="polar_interface_resis_task,lock_polar_interface_resis_task" />
+	</MOVERS>
+
+	<FILTERS>
+
+		<ShapeComplementarity name="sc1" multicomp="0" verbose="1" min_sc="0.5" jump="1" write_int_area="1" write_median_dist="1" confidence="0" />
+
+		<ShapeComplementarity name="sc1_for_hpc" multicomp="0" verbose="1" min_sc="0.5" jump="1" write_int_area="1" write_median_dist="1" confidence="0" />
+			<MoveBeforeFilter name="sc1_hpc" mover="ala_mut" filter="sc1_for_hpc" confidence="0" />
+
+        	<BuriedUnsatHbonds name="vbuns" residue_selector="interface_resis" report_all_heavy_atom_unsats="true" scorefxn="sfxn_clean" ignore_surface_res="false" print_out_info_to_pdb="true" atomic_depth_selection="5.5" burial_cutoff="1000" confidence="0" />
+        	<BuriedUnsatHbonds name="sbuns" residue_selector="interface_resis" report_all_heavy_atom_unsats="true" scorefxn="sfxn_clean" cutoff="4" residue_surface_cutoff="20.0" ignore_surface_res="true" print_out_info_to_pdb="true" dalphaball_sasa="1" probe_radius="1.1" atomic_depth_selection="5.5" atomic_depth_deeper_than="false" confidence="0" />
+
+		<Sasa name="sasa" threshold="325" upper_threshold="750" jump="1" hydrophobic="0" polar="0" confidence="0" /> //1comp sasa is half of 2-component!!
+		<Sasa name="sasa_for_hpc" threshold="300" upper_threshold="750" jump="1" hydrophobic="0" polar="0" confidence="0" /> //1comp sasa is half of 2-component!!
+        		<MoveBeforeFilter name="sasa_hpc" mover="ala_mut" filter="sasa_for_hpc" confidence="0" />
+
+        	<ContactMolecularSurface name="contact_mol_surf" min_interface="0" distance_weight="1.0" verbose="1" quick="0" target_selector="int_resis_chainA" binder_selector="int_resis_chainB" confidence="0" />
+
+		<Ddg name="ddG" repeats="1" extreme_value_removal="0" translate_by="1000" scorefxn="sfxn_clean" task_operations="pack_task,lock_task,repack_only,ic,ex1_ex2" repack="1" threshold="0" relax_mover="min_clean" repack_bound="0" relax_bound="0" repack_unbound="1" relax_unbound="1" confidence="0" />
+		<MoveBeforeFilter name="ddG_hpc" mover="ala_mut" filter="ddG" confidence="0" />
+		FilterScan name="filter_scan" scorefxn="sfxn_clean" task_operations="ic,ex1_ex2,interface_task,pack_task,lock_task" triage_filter="true_filter" dump_pdb="0" filter="ddG" report_all="1" relax_mover="min_repack_min" resfile_name="([PDB].resfile" resfile_general_property="'nataa'" delta="0" unbound="1" jump="1" rtmin="0" delta_filters="sc1,sc1_hpc,vbuns,sbuns,sasa,sasa_hpc,contact_mol_surf,ddG,ddG_hpc" score_log_file="'filter_scan'"/>
+		<FilterScan name="filter_scan" scorefxn="sfxn_clean" task_operations="ic,ex1_ex2,interface_task,pack_task,lock_task" triage_filter="true_filter" dump_pdb="0" filter="ddG" report_all="1" relax_mover="min_repack_min" resfile_name="([PDB].resfile" resfile_general_property="'nataa'" delta="0" rtmin="0" delta_filters="sc1,sc1_hpc,vbuns,sbuns,sasa,sasa_hpc,contact_mol_surf,ddG,ddG_hpc" score_log_file="'filter_scan'"/>
+
+		<DdGScan name="ddg_scan" task_operations="ic,ex1_ex2,interface_task,pack_task,lock_task" repeats="3" scorefxn="sfxn_clean" report_diffs="1" write2pdb="1" />
+
+	</FILTERS>
+    
+	//FOR SIMPLE METRICS
+	<SIMPLE_METRICS>
+        	<SelectedResidueCountMetric name="chnA_int_resis" residue_selector="int_resis_chainA" custom_type="int_resi_chnA_" />
+        	<SelectedResidueCountMetric name="chnB_int_resis" residue_selector="int_resis_chainB" custom_type="int_resi_chnB_" />
+	</SIMPLE_METRICS>
+
+	<MOVERS>
+		<RunSimpleMetrics name="run_metrics" metrics="chnA_int_resis,chnB_int_resis" />
+	</MOVERS>
+
+	<PROTOCOLS>
+        //layer design
+   		<Add mover_name="label_interface_resis" />
+		//filters
+		Add filter_name="sc1" />
+		Add filter_name="sc1_hpc" />
+		Add filter_name="sasa" />
+       		Add filter_name="sasa_hpc" />
+        	Add filter_name="contact_mol_surf" />
+		Add filter_name="ddG" />
+		Add filter_name="ddG_hpc" />
+		Add filter_name="filter_scan" />
+		<Add filter_name="ddg_scan" />
+		//run simple metrics
+        	<Add mover_name="run_metrics"/>
+	</PROTOCOLS>
+	
+	<OUTPUT scorefxn="sfxn_clean" />
+</ROSETTASCRIPTS>

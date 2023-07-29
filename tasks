@@ -1,0 +1,2 @@
+bash sh/filter_scan_int.sh input_pdb1
+bash sh/filter_scan_int.sh input_pdb2
